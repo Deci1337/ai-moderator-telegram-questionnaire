@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 import services.form
 import services.telegram
+import services.analytics as analytics
 
 from keyboards.inline import forms as kb_forms
 from keyboards.inline import default as kb_default
@@ -161,9 +162,20 @@ async def fsm_FormManage_search_like(message: Message, state: FSMContext):
     data = await state.get_data()
     user = message.from_user
 
+    target_user_id = data['watch'].user_id
+    form_id = data['watch'].id
+    session_id = data.get('search_session_id')
+    feed_position = data.get('search_feed_position', 0)
+
+    reverse_like = await services.form.get_reverse_like(
+        viewer_id=user.id,
+        target_id=target_user_id,
+    )
+    is_mutual = reverse_like is not None
+
     is_new = await services.form.create_form_like(
-        user_id=data['watch'].user_id,
-        form_id=data['watch'].id,
+        user_id=target_user_id,
+        form_id=form_id,
         liked_user_id=user.id
     )
 
@@ -171,18 +183,53 @@ async def fsm_FormManage_search_like(message: Message, state: FSMContext):
 
     await services.form.create_form_term(
         user_id=user.id,
-        form_id=data['watch'].id,
+        form_id=form_id,
         expiry_date=expiry_date
     )
 
-    if is_new:
-        await services.telegram.send_message(
-            chat_id=data['watch'].user_id,
-            text='У вас есть взаимная симпатия',
-            reply_markup=await kb_forms.show_likes()
+    analytics.log_like_sent(
+        who_id=user.id,
+        target_id=target_user_id,
+        session_id=session_id,
+        feed_type="watch",
+        is_duplicate=not is_new,
+    )
+
+    if is_new and is_mutual:
+        time_to_match_sec = max(
+            0.0,
+            (datetime.now() - reverse_like.created_at).total_seconds(),
+        )
+        analytics.log_mutual_match(
+            user_a=reverse_like.liked_user_id,
+            user_b=user.id,
+            initiator_id=reverse_like.liked_user_id,
+            time_to_match_sec=time_to_match_sec,
         )
 
+    if is_new:
+        notify_text = (
+            'У вас есть взаимная симпатия'
+            if is_mutual
+            else 'Ваша анкета понравилась пользователю — посмотрите в /likes'
+        )
+        try:
+            await services.telegram.send_message(
+                chat_id=target_user_id,
+                text=notify_text,
+                reply_markup=await kb_forms.show_likes()
+            )
+        except Exception:
+            # Target may have blocked the bot, deleted their account, or
+            # never started a chat (test/seeded users). Don't let a notify
+            # failure unwind the like flow — analytics already fired.
+            pass
+
     await state.clear()
+    await state.update_data(
+        search_session_id=session_id,
+        search_feed_position=feed_position,
+    )
 
     await commands.cmd_watch(message, state)
 
@@ -191,6 +238,9 @@ async def fsm_FormManage_search_like(message: Message, state: FSMContext):
 async def fsm_FormManage_search_dislike(message: Message, state: FSMContext):
     data = await state.get_data()
     user = message.from_user
+
+    session_id = data.get('search_session_id')
+    feed_position = data.get('search_feed_position', 0)
 
     expiry_date = datetime.now() + timedelta(days=14)
 
@@ -201,6 +251,10 @@ async def fsm_FormManage_search_dislike(message: Message, state: FSMContext):
     )
 
     await state.clear()
+    await state.update_data(
+        search_session_id=session_id,
+        search_feed_position=feed_position,
+    )
 
     await commands.cmd_watch(message, state)
 
@@ -215,15 +269,20 @@ async def fsm_FormManage_likes_like(message: Message, state: FSMContext):
     data = await state.get_data()
     user = message.from_user
 
+    likes_row = data['likes']
+    initiator_id = likes_row.liked_user_id
+    session_id = data.get('likes_session_id')
+    feed_position = data.get('likes_feed_position', 0)
+
     try:
         await services.telegram.send_message(
-            chat_id=data['likes'].liked_user_id,
+            chat_id=initiator_id,
             text=f'У вас есть взаимная симпатия <a href="tg://user?id={user.id}">{user.first_name}</a>'
         )
     except:
         pass
 
-    await message.answer(f'Приятного общения! <a href="tg://user?id={data["likes"].liked_user_id}">Пользователь</a>')
+    await message.answer(f'Приятного общения! <a href="tg://user?id={initiator_id}">Пользователь</a>')
 
     expiry_date = datetime.now() + timedelta(weeks=100)
 
@@ -234,16 +293,38 @@ async def fsm_FormManage_likes_like(message: Message, state: FSMContext):
     )
 
     await services.form.create_form_term(
-        user_id=data['likes'].liked_user_id,
+        user_id=initiator_id,
         form_id=data['watch'].id,
         expiry_date=expiry_date
     )
 
+    analytics.log_like_sent(
+        who_id=user.id,
+        target_id=initiator_id,
+        session_id=session_id,
+        feed_type="likes",
+        is_duplicate=False,
+    )
+    time_to_match_sec = max(
+        0.0,
+        (datetime.now() - likes_row.created_at).total_seconds(),
+    )
+    analytics.log_mutual_match(
+        user_a=initiator_id,
+        user_b=user.id,
+        initiator_id=initiator_id,
+        time_to_match_sec=time_to_match_sec,
+    )
+
     await services.form.delete_likes_by_liked_user_id(
-        liked_user_id=data['likes'].liked_user_id
+        liked_user_id=initiator_id
     )
 
     await state.clear()
+    await state.update_data(
+        likes_session_id=session_id,
+        likes_feed_position=feed_position,
+    )
 
     await commands.cmd_likes(message, state)
 
@@ -252,6 +333,9 @@ async def fsm_FormManage_likes_like(message: Message, state: FSMContext):
 async def fsm_FormManage_likes_dislike(message: Message, state: FSMContext):
     data = await state.get_data()
     user = message.from_user
+
+    session_id = data.get('likes_session_id')
+    feed_position = data.get('likes_feed_position', 0)
 
     expiry_date = datetime.now() + timedelta(days=14)
 
@@ -272,5 +356,9 @@ async def fsm_FormManage_likes_dislike(message: Message, state: FSMContext):
     )
 
     await state.clear()
+    await state.update_data(
+        likes_session_id=session_id,
+        likes_feed_position=feed_position,
+    )
 
     await commands.cmd_likes(message, state)
