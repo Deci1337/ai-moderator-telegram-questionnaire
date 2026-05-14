@@ -213,11 +213,17 @@ async def fsm_FormManage_search_like(message: Message, state: FSMContext):
             if is_mutual
             else 'Ваша анкета понравилась пользователю — посмотрите в /likes'
         )
-        await services.telegram.send_message(
-            chat_id=target_user_id,
-            text=notify_text,
-            reply_markup=await kb_forms.show_likes()
-        )
+        try:
+            await services.telegram.send_message(
+                chat_id=target_user_id,
+                text=notify_text,
+                reply_markup=await kb_forms.show_likes()
+            )
+        except Exception:
+            # Target may have blocked the bot, deleted their account, or
+            # never started a chat (test/seeded users). Don't let a notify
+            # failure unwind the like flow — analytics already fired.
+            pass
 
     await state.clear()
     await state.update_data(

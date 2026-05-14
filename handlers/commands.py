@@ -114,7 +114,10 @@ async def cmd_watch(message: Message, state: FSMContext):
         session_id = analytics.new_session_id()
         analytics.log_session_started(user_id=user.id, session_id=session_id, feed_type="watch")
 
-    form = await services_form.get_random_form_excluding_terms(user.id) if data.get('watch') is None else data['watch']
+    # Always re-query: don't reuse a cached `data['watch']` from a possibly
+    # stale source (e.g. /likes flow stored a different form under the same
+    # key). The original caching let /likes' form leak into /watch.
+    form = await services_form.get_random_form_excluding_terms(user.id)
     if form is None:
         analytics.log_results_empty(user_id=user.id, session_id=session_id, feed_type="watch")
         await state.update_data(
@@ -167,9 +170,9 @@ async def cmd_likes(message: Message, state: FSMContext):
         session_id = analytics.new_session_id()
         analytics.log_session_started(user_id=user.id, session_id=session_id, feed_type="likes")
 
-    form, form_likes = (await services_form.get_random_form_and_like_by_user_id(user.id)
-                        if data.get('likes') is None or data.get('watch') is None
-                        else (data['watch'], data['likes']))
+    # Always re-query (same reason as cmd_watch): the shared `data['watch']`
+    # key would otherwise leak the /watch-flow form into the /likes feed.
+    form, form_likes = await services_form.get_random_form_and_like_by_user_id(user.id)
 
     if form_likes is None:
         analytics.log_results_empty(user_id=user.id, session_id=session_id, feed_type="likes")

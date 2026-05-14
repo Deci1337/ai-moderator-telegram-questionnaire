@@ -81,7 +81,7 @@ async def call_watch_forms(call: CallbackQuery, state: FSMContext):
         session_id = analytics.new_session_id()
         analytics.log_session_started(user_id=user.id, session_id=session_id, feed_type="watch")
 
-    form = await services_form.get_random_form_excluding_terms(user.id) if data.get('watch') is None else data['watch']
+    form = await services_form.get_random_form_excluding_terms(user.id)
     if form is None:
         analytics.log_results_empty(user_id=user.id, session_id=session_id, feed_type="watch")
         await state.update_data(
@@ -154,9 +154,7 @@ async def call_watch_likes(call: CallbackQuery, state: FSMContext):
         session_id = analytics.new_session_id()
         analytics.log_session_started(user_id=user.id, session_id=session_id, feed_type="likes")
 
-    form, form_likes = (await services_form.get_random_form_and_like_by_user_id(user.id)
-                        if data.get('likes') is None or data.get('watch') is None
-                        else (data['watch'], data['likes']))
+    form, form_likes = await services_form.get_random_form_and_like_by_user_id(user.id)
 
     if form_likes is None:
         analytics.log_results_empty(user_id=user.id, session_id=session_id, feed_type="likes")
