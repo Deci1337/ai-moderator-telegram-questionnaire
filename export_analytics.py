@@ -101,7 +101,7 @@ def main() -> int:
     args = parse_args()
 
     required = ["DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME"]
-    missing = [v for v in required if not os.getenv(v)]
+    missing = [v for v in required if v not in os.environ]
     if missing:
         print(f"Missing env vars: {', '.join(missing)}", file=sys.stderr)
         return 1
