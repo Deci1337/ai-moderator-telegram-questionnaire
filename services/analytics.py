@@ -52,11 +52,17 @@ def _fire(coro: Awaitable[None]) -> None:
         except Exception:
             logger.exception("analytics: failed to persist event")
 
+    inner = _safe()
     try:
-        task = asyncio.create_task(_safe())
+        task = asyncio.create_task(inner)
     except RuntimeError:
-        # No running loop — caller is outside an async context. Drop the event
-        # rather than blow up; analytics is best-effort.
+        # No running loop — caller is outside an async context. Drop the
+        # event rather than blow up; analytics is best-effort. Close the
+        # unscheduled coroutines so they don't show up as "never awaited".
+        inner.close()
+        close = getattr(coro, "close", None)
+        if callable(close):
+            close()
         logger.warning("analytics: no running loop, event dropped")
         return
     _pending_tasks.add(task)
