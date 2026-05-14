@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Optional
 
 from config.database import async_session_maker
@@ -23,6 +24,7 @@ def new_session_id() -> str:
 async def _persist(
     event_type: str,
     *,
+    created_at: datetime,
     user_id: Optional[int] = None,
     target_id: Optional[int] = None,
     session_id: Optional[str] = None,
@@ -35,6 +37,7 @@ async def _persist(
             target_id=target_id,
             session_id=session_id,
             payload=payload or {},
+            created_at=created_at,
         )
         session.add(event)
         await session.commit()
@@ -69,9 +72,21 @@ def _fire(coro: Awaitable[None]) -> None:
     task.add_done_callback(_pending_tasks.discard)
 
 
+def _now() -> datetime:
+    """Wall-clock timestamp captured at the moment the caller emitted the event.
+
+    Stamping Python-side (rather than relying on Postgres' `now()` server-default
+    at INSERT time) keeps events strictly ordered in the order they fired,
+    regardless of how the fire-and-forget background tasks happen to race
+    against each other on the way to the database.
+    """
+    return datetime.now(timezone.utc)
+
+
 def log_session_started(*, user_id: int, session_id: str, feed_type: str = "watch") -> None:
     _fire(_persist(
         EVENT_SEARCH_SESSION_STARTED,
+        created_at=_now(),
         user_id=user_id,
         session_id=session_id,
         payload={"feed_type": feed_type},
@@ -88,6 +103,7 @@ def log_profile_viewed(
 ) -> None:
     _fire(_persist(
         EVENT_PROFILE_VIEWED,
+        created_at=_now(),
         user_id=who_id,
         target_id=target_id,
         session_id=session_id,
@@ -105,6 +121,7 @@ def log_like_sent(
 ) -> None:
     _fire(_persist(
         EVENT_LIKE_SENT,
+        created_at=_now(),
         user_id=who_id,
         target_id=target_id,
         session_id=session_id,
@@ -121,6 +138,7 @@ def log_mutual_match(
 ) -> None:
     _fire(_persist(
         EVENT_MUTUAL_MATCH_CREATED,
+        created_at=_now(),
         user_id=user_a,
         target_id=user_b,
         payload={
@@ -135,6 +153,7 @@ def log_mutual_match(
 def log_results_empty(*, user_id: int, session_id: Optional[str], feed_type: str = "watch") -> None:
     _fire(_persist(
         EVENT_SEARCH_RESULTS_EMPTY,
+        created_at=_now(),
         user_id=user_id,
         session_id=session_id,
         payload={"feed_type": feed_type},
