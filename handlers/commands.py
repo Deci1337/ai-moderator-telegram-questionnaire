@@ -11,6 +11,7 @@ from keyboards.reply import forms as kb_forms
 from handlers.form.fsm import FormManage
 
 from services import form as services_form
+from services import analytics
 
 import re
 
@@ -107,14 +108,38 @@ async def cmd_watch(message: Message, state: FSMContext):
     user = message.from_user
     data = await state.get_data()
 
+    session_id = data.get('search_session_id')
+    feed_position = data.get('search_feed_position', 0)
+    if session_id is None:
+        session_id = analytics.new_session_id()
+        analytics.log_session_started(user_id=user.id, session_id=session_id, feed_type="watch")
+
     form = await services_form.get_random_form_excluding_terms(user.id) if data.get('watch') is None else data['watch']
     if form is None:
+        analytics.log_results_empty(user_id=user.id, session_id=session_id, feed_type="watch")
+        await state.update_data(
+            search_session_id=session_id,
+            search_feed_position=feed_position,
+        )
         return await message.answer(
             text="В данный момент нету актуальных предложений",
             reply_markup=await kb_forms.delete()
         )
 
-    await state.update_data(watch=form)
+    feed_position += 1
+    await state.update_data(
+        watch=form,
+        search_session_id=session_id,
+        search_feed_position=feed_position,
+    )
+
+    analytics.log_profile_viewed(
+        who_id=user.id,
+        target_id=form.user_id,
+        session_id=session_id,
+        feed_position=feed_position,
+        feed_type="watch",
+    )
 
     RANK_NAME = 'Unknown'
     for rank in RANKS:
@@ -136,17 +161,42 @@ async def cmd_likes(message: Message, state: FSMContext):
     user = message.from_user
     data = await state.get_data()
 
+    session_id = data.get('likes_session_id')
+    feed_position = data.get('likes_feed_position', 0)
+    if session_id is None:
+        session_id = analytics.new_session_id()
+        analytics.log_session_started(user_id=user.id, session_id=session_id, feed_type="likes")
+
     form, form_likes = (await services_form.get_random_form_and_like_by_user_id(user.id)
                         if data.get('likes') is None or data.get('watch') is None
                         else (data['watch'], data['likes']))
 
     if form_likes is None:
+        analytics.log_results_empty(user_id=user.id, session_id=session_id, feed_type="likes")
+        await state.update_data(
+            likes_session_id=session_id,
+            likes_feed_position=feed_position,
+        )
         return await message.answer(
             text="В данный момент нету взаимных симпатий",
             reply_markup=await kb_forms.delete()
         )
 
-    await state.update_data(likes=form_likes, watch=form)
+    feed_position += 1
+    await state.update_data(
+        likes=form_likes,
+        watch=form,
+        likes_session_id=session_id,
+        likes_feed_position=feed_position,
+    )
+
+    analytics.log_profile_viewed(
+        who_id=user.id,
+        target_id=form.user_id,
+        session_id=session_id,
+        feed_position=feed_position,
+        feed_type="likes",
+    )
 
     RANK_NAME = 'Unknown'
     for rank in RANKS:

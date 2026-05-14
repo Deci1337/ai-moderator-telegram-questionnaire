@@ -218,3 +218,22 @@ async def delete_likes_by_liked_user_id(liked_user_id: int):
 
         await session.execute(stmt)
         await session.commit()
+
+
+async def get_reverse_like(viewer_id: int, target_id: int):
+    """Return the earliest FormLikes row where `target_id` previously liked
+    `viewer_id`'s form, or None. Used to detect a mutual match when
+    `viewer_id` is about to like `target_id` back.
+    """
+    async with async_session_maker() as session:
+        stmt = (
+            select(FormLikes)
+            .where(
+                FormLikes.user_id == viewer_id,
+                FormLikes.liked_user_id == target_id,
+            )
+            .order_by(FormLikes.created_at.asc())
+            .limit(1)
+        )
+        result = await session.execute(stmt)
+        return result.scalars().first()
